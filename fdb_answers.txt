@@ -1,23 +1,24 @@
 Q1: It does this to have better modularity between all the moving parts. TMS (proxies, resolvers, sequencer) makes sure writes in the form of transactions and commits are properly ordered and 
 their conflicts resolved via read/write sets. SS does a completely separate function: it ensures the safe storage of key-value pairs with their corresponding histories and versions such that reads 
-for certain snapshots of the system get the right results. Hence, since they have separate functions, it is good to separate them to improve scalability (TMS can be horizontally scaled and SS can 
-be vertically scaled separately) and to prevent failures on one side from collapsing the whole system.
+for certain snapshots of the system get the right results. Hence, since they have separate functions, it is good to separate them to improve scalability (TMS and SS can be scaled separately as needed) 
+and to prevent failures on one side from collapsing the whole system.
 
-Q2: The component responsible is TMS (Transaction Management System) which is being coordinated by the proxies, specifically the resolvers. As the transaction is committing, it sends relevant 
+Q2: The component responsible is TMS (Transaction Management System) which is being coordinated by the resolvers after the proxies hand-off to them. As the transaction is committing, it sends relevant 
 information about the transaction (conflict ranges, read version, etc.) to the proxies. Then, the resolvers check if the keys that are going to be affected will have conflicts because of other 
-transactions that are committing concurrently. This all occurs before the final commit is done that cements the transaction so it can be aborted to ensure serializability and correctness in the overall system.
+transactions that are committing concurrently. This conflict checking is done during the commit phase after the transaction is submitted but before the commit version is assigned, meaning this all 
+occurs before the final commit is done that cements the transaction so it can be aborted to ensure serializability and correctness in the overall system.
 
-Q3: The read version—which is constantly increasing to ensure uniqueness—is important because it gives a timestamp of when this read was relevant and correct (which snapshot it belongs to). This is crucial to 
-ensure consistency and stability in the observed state, so for example transactions that are occurring now know to look at past confirmed states rather than anything from ongoing transactions that aren’t stable 
-yet. Together with the previously discussed conflict checking, this is what gives FoundationDB strict serializability: the timestamping it provides allows FoundationDB to give an accurate global ordering of transactions 
-via the comparison it allows for.
+Q3: The read version is monotonically increasing to define which snapshot a transaction reads from and ensures their view of the database is consistent. It is important because it gives a timestamp of 
+when this read was relevant and correct (which snapshot it belongs to). This is crucial to ensure consistency and stability in the observed state, so for example transactions that are occurring now 
+know to look at past confirmed states rather than anything from ongoing transactions that aren’t stable yet. Together with the previously discussed conflict checking, this is what gives FoundationDB 
+strict serializability: the timestamping it provides allows FoundationDB to give an accurate global ordering of transactions via the comparison it allows for.
 
 Q4:A standard read gets data from a snapshot, but then checks the keys for conflicts prior to committing while a snapshot read doesn’t do this final check. So, snapshots don’t do an abort if there is an undergoing 
 change hence not guaranteeing the stability and consistency of a standard read (they can be stale), but it can improve throughput and the speed of getting results (no retries). They are preferred in situations like
 that where stale reads are acceptable at the cost of being able to process a lot of transactions quickly like for getting metrics and analytics in real time, and getting large estimate statistics from a large database 
 (e.g. number of global users of Instagram right now).
 
-Q5: The cheap recovery is possible because of the separate LogServers that act as write-ahead logs. Transactions are first written to these replicated, fault tolerant LogServers before they are considered committed, 
-and the actual StorageServers don’t make changes based on the user, but based on what it sees in the LogServers hence removing the actual StorageServers from the critical path. This means that if failure happens in 
-a StorageServer, recovery is cheap because it does not need to block transaction processing (these go to LogServers), nor does it need to do any complex synchronization algorithm. Rather, these StorageServers can just 
-read the logs and catch up asynchronously, providing minimal overhead.
+Q5: The cheap recovery is possible because of the separate LogServers that act similarly to write-ahead logs although they replicated mutation logs, rather than traditional WAL replay semantics. Transactions are first 
+written to these replicated, fault tolerant LogServers before they are considered committed, and the actual StorageServers don’t make changes based on the user, but based on what it sees in the LogServers hence removing 
+the actual StorageServers from the critical path. This means that if failure happens in a StorageServer, recovery is cheap because it does not need to block transaction processing (these go to LogServers), nor does it 
+need to do any complex synchronization algorithm. Rather, these StorageServers can just read the logs and catch up asynchronously, hence avoiding replay on the critical path and providing minimal overhead.
